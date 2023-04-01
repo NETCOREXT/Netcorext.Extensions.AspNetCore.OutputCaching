@@ -1,0 +1,66 @@
+name: Build and Deploy NuGet Package
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force exec'
+        type: boolean
+        required: true
+        default: false
+
+jobs:
+  Detect:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.detect.outputs.app }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Detect Change
+        id: detect
+        run: |
+          APP="${GITHUB_REPOSITORY#*/}"
+
+          PROJECT_PATH=`find . -type f -iname "*.csproj" | grep -Em1 "${APP}(.API)?.csproj" || true`
+
+          if [ ! -z "$PROJECT_PATH" ]; then
+            APP=`basename "${PROJECT_PATH}" .csproj`
+          fi
+          
+          CHANGE_FILES=`git diff --no-commit-id --name-only HEAD^`
+
+          CHANGED=`echo "$CHANGE_FILES" | grep -Em 1 '.cs|.proto' || true`
+          if [ -z "$CHANGED" ] && [ "${{ inputs.force }}" != true ]; then
+            echo "No changes detected"
+          
+            APP=""
+          fi
+          
+          echo "app=${APP}" >> $GITHUB_OUTPUT
+  Build:
+    needs: Detect
+    if: needs.Detect.outputs.app != ''
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.build.outputs.artifact }}
+    steps:
+      - id: build
+        name: Build Package
+        uses: netcorext/dotnet-build-package-action@dev
+  Deploy:
+    needs: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: netcorext/push-nuget-package-action@dev
+        name: Push Package
+        with:
+          artifact: ${{ needs.Build.outputs.artifact }}
+          nuget-api-url: ${{ secrets.NUGET_API_URL }}
+          nuget-api-key: ${{ secrets.NUGET_API_KEY }}
